@@ -11,7 +11,6 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    // Parse command and act accordingly
     let command = &args[2];
     match command.as_str() {
         ".dbinfo" => {
