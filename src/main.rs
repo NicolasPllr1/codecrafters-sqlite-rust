@@ -48,11 +48,11 @@ fn main() -> Result<()> {
             println!("Cells offsets: {:?}", cell_ptr_array);
 
             // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
-            let sqlite_page_offset = 100; // it's right after the database header
+            // let sqlite_page_offset = 100; // it's right after the database header
 
             // let table_names = Vec::new();
             for cell_off_set in cell_ptr_array {
-                let record = get_record_in_cell(0, cell_off_set, &mut file);
+                let _ = get_record_in_cell(0, cell_off_set, &mut file);
             }
         }
         _ => bail!("Missing or invalid command passed: {}", command),
@@ -91,47 +91,17 @@ fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Resul
 // - 'record'
 // Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
 fn get_record_in_cell(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<()> {
-    dbg!(cell_offset);
-
-    db.seek(SeekFrom::Start((page_offset + cell_offset) as u64))?;
-    let mut reader = BufReader::new(db);
-
-    // Reading first varint: the cell size
-    // Going byte by byte, checking the MSB for continuation
-    let mut cell_size_varint_bytes = [0; 9]; // max 9 bytes for a varint
-    let mut idx: usize = 0; // idx into the varint bytes
-    let mut msb: bool = true; // 0 ~ false ~ end of the varint ; 1 ~ true ~ varint continues onto the
-                              // next byte
-    let mut varint_byte = [0; 1];
-    while msb {
-        reader.read_exact(&mut varint_byte)?;
-
-        dbg!(varint_byte);
-        // update MSB
-        msb = ((varint_byte[0] >> 7) & 0b1) == 1;
-        dbg!(msb);
-
-        // drop the MSB
-        let byte_without_msb = varint_byte[0] & 0b01111111;
-        dbg!(byte_without_msb);
-        // add this byte to the varint bytes we already read
-        cell_size_varint_bytes[idx] = byte_without_msb;
-        idx += 1;
-    }
-    assert!(cell_size_varint_bytes[cell_size_varint_bytes.len() - 1] == 0);
-    let cell_size_le_bytes: [u8; 8] = cell_size_varint_bytes[..8]
-        .try_into()
-        .expect("slice should have 8 bytes");
-    let cell_size = u64::from_le_bytes(cell_size_le_bytes);
+    let (cell_size, _) = parse_varint((page_offset + cell_offset) as u64, db)?;
     dbg!(cell_size);
-    println!("---\n");
 
-    // Next, skipping over the rowid as we don't need to parse it for now
-    // this will get us to the _record_
-    while msb {
-        reader.read_exact(&mut varint_byte)?;
-        msb = ((varint_byte[0] >> 7) & 0b1) == 1;
-    }
+    // println!("---\n");
+    //
+    // // Next, skipping over the rowid as we don't need to parse it for now
+    // // this will get us to the _record_
+    // while msb {
+    //     reader.read_exact(&mut varint_byte)?;
+    //     msb = ((varint_byte[0] >> 7) & 0b1) == 1;
+    // }
 
     // Now the reader cursor is at the record.
     // The record is composed of a header and a body
@@ -157,9 +127,15 @@ fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
 // Returns:
 // - the parsed varint as a u64
 // - the size in bytes of the varint encoding
-fn parse_varint(offset: u64, reader: &mut impl Read + Seek) -> Result<(u64, usize)> {
+fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, usize)> {
+    println!("\n\n---");
+    dbg!(offset);
+
     reader.seek(SeekFrom::Start(offset))?;
     let mut buf_reader = BufReader::new(reader);
+
+    // Parsing the varint
+    // Going byte by byte, checking the MSB for continuation
 
     let mut varint_bytes = [0; 9]; // max 9 bytes for a varint
     let mut idx: usize = 0; // idx into the varint bytes
@@ -169,7 +145,7 @@ fn parse_varint(offset: u64, reader: &mut impl Read + Seek) -> Result<(u64, usiz
     while msb {
         buf_reader.read_exact(&mut varint_byte)?;
 
-        dbg!(varint_byte);
+        println!("Varint byte #{idx} hex: {varint_byte:x?}");
         // update MSB
         msb = ((varint_byte[0] >> 7) & 0b1) == 1;
         dbg!(msb);
@@ -186,6 +162,9 @@ fn parse_varint(offset: u64, reader: &mut impl Read + Seek) -> Result<(u64, usiz
         .try_into()
         .expect("slice should have 8 bytes");
     let parsed_varint = u64::from_le_bytes(le_bytes);
+
+    dbg!(parsed_varint);
+    println!("---\n\n");
 
     return Ok((parsed_varint, idx));
 }
