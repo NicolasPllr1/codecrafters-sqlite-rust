@@ -44,23 +44,8 @@ fn main() -> Result<()> {
 
             file.seek(SeekFrom::Start(db_header_size))?;
 
-            // Reading the 'sqlite_schema' table
+            let table_names = get_tables_names_from_sqlite_schema_table(&mut file)?;
 
-            // Reading its header
-            // 'The two-byte integer at offset 3 gives the number of cells on the page.'
-            let mut sqlite_schema_table_header = [0; 8];
-            file.read_exact(&mut sqlite_schema_table_header)?;
-
-            let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, &mut file)?;
-
-            // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
-
-            let page_offset = 0;
-            let mut table_names = Vec::new();
-            for cell_offset in cell_ptr_array {
-                let tbl_name_bytes = get_table_name(page_offset, cell_offset, &mut file)?;
-                table_names.push(String::from_utf8(tbl_name_bytes)?);
-            }
             let mut output_str = String::new();
             for tbl_name in &table_names[..&table_names.len() - 1] {
                 output_str.push_str(&tbl_name);
@@ -80,7 +65,10 @@ fn main() -> Result<()> {
 
 /// "The cell pointer array of a b-tree page immediately follows the b-tree page header. Let K be the number of cells on the btree. The cell pointer array consists of K 2-byte integer offsets to the cell contents."
 /// And codecrafters add: "The offsets are relative to the start of the page".
-fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Result<Vec<u16>> {
+fn get_cell_ptr_array(
+    header: &[u8; 8],
+    b_tree_page_content: &mut (impl Read + Seek),
+) -> Result<Vec<u16>> {
     let nb_cells: u16 = u16::from_be_bytes([header[3], header[4]]);
 
     let mut offsets_array_buff: Vec<u8> = vec![0; (2 * nb_cells).into()];
@@ -98,16 +86,44 @@ fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Resul
     Ok(offsets_array)
 }
 
-// Get the table name raw bytes from the corresponding cell data in the sql schema table.
+/// Parse the 'sql_schema' table for the database tables names.
+/// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
+fn get_tables_names_from_sqlite_schema_table(db: &mut (impl Read + Seek)) -> Result<Vec<String>> {
+    // Reading the 'sqlite_schema' table
+
+    // Reading its header
+    // 'The two-byte integer at offset 3 gives the number of cells on the page.'
+    let mut sqlite_schema_table_header = [0; 8];
+    db.read_exact(&mut sqlite_schema_table_header)?;
+
+    let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, db)?;
+
+    // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
+
+    let page_offset = 0;
+    let mut table_names = Vec::new();
+    for cell_offset in cell_ptr_array {
+        let tbl_name_bytes = get_table_name(page_offset, cell_offset, db)?;
+        table_names.push(String::from_utf8(tbl_name_bytes)?);
+    }
+
+    Ok(table_names)
+}
+
+/// Get the table name raw bytes from the corresponding cell data in the sql schema table.
+///
+/// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
 //
-// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
-//
-// Cell structure:
-// - cell size (varint): 'the total number of bytes of payload, including any overflow'
-// - rowid (varint)
-// - 'record'
-// Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
-fn get_table_name(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<Vec<u8>> {
+/// Cell structure:
+/// - cell size (varint): 'the total number of bytes of payload, including any overflow'
+/// - rowid (varint)
+/// - 'record'
+/// Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
+fn get_table_name(
+    page_offset: u16,
+    cell_offset: u16,
+    db: &mut (impl Read + Seek),
+) -> Result<Vec<u8>> {
     let mut offset = (page_offset + cell_offset) as u64;
 
     let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
@@ -165,15 +181,15 @@ fn get_table_name(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<V
     Ok(tbl_name_value)
 }
 
-// fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
-//     todo!()
-// }
-
-// Reads the varint using the Reader starting from the given offset.
-// Will used buffer reads to read 1 byte at a time the varint.
-//
-// Returns:
-// - the parsed varint as a u64
+/// fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
+///     todo!()
+/// }
+///
+/// Reads the varint using the Reader starting from the given offset.
+/// Will used buffer reads to read 1 byte at a time the varint.
+///
+/// Returns:
+/// - the parsed varint as a u64
 // - the size in bytes of the varint encoding
 fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, usize)> {
     reader.seek(SeekFrom::Start(offset))?;
