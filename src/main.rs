@@ -24,6 +24,18 @@ fn main() -> Result<()> {
             let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
 
             println!("database page size: {}", page_size);
+            // Next, reading the 'sqlite_schema' table
+
+            // Reading its header
+            // 'The two-byte integer at offset 3 gives the number of cells on the page.'
+            let mut sqlite_schema_table_header = [0; 8];
+            file.read_exact(&mut sqlite_schema_table_header)?;
+
+            // Extraction info from this  'sqlite_schema' table _header_
+
+            let nb_tables =
+                u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
+            println!("number of tables: {}", nb_tables);
         }
         ".tables" => {
             let mut file = File::open(&args[1])?;
@@ -45,7 +57,7 @@ fn main() -> Result<()> {
 
             let nb_tables =
                 u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
-            // println!("number of tables: {}", nb_tables);
+            println!("number of tables: {}", nb_tables);
 
             // 'The two-byte integer at offset 5 designates the start of the cell content area.
             // A zero value for this integer is interpreted as 65536.'
