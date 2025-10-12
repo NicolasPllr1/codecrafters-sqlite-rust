@@ -24,7 +24,16 @@ fn main() -> Result<()> {
             let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
 
             println!("database page size: {}", page_size);
+        }
+        ".tables" => {
+            let mut file = File::open(&args[1])?;
+            let mut db_header = [0; 100];
+            file.read_exact(&mut db_header)?;
 
+            // 'The page size for a database file is determined by the 2-byte integer located at an offset of 16 bytes from the beginning of the database file.'
+
+            #[allow(unused_variables)]
+            let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
             // Next, reading the 'sqlite_schema' table
 
             // Reading its header
@@ -36,24 +45,34 @@ fn main() -> Result<()> {
 
             let nb_tables =
                 u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
-            println!("number of tables: {}", nb_tables);
+            // println!("number of tables: {}", nb_tables);
 
             // 'The two-byte integer at offset 5 designates the start of the cell content area.
             // A zero value for this integer is interpreted as 65536.'
-            let cell_content_area_start =
+            let _cell_content_area_start =
                 u16::from_be_bytes([sqlite_schema_table_header[5], sqlite_schema_table_header[6]]);
-            println!("Cell content area offset: {}", cell_content_area_start);
+            // println!("Cell content area offset: {}", cell_content_area_start);
 
             let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, &mut file)?;
-            println!("Cells offsets: {:?}", cell_ptr_array);
+            // println!("Cells offsets: {:?}", cell_ptr_array);
 
             // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
             // let sqlite_page_offset = 100; // it's right after the database header
 
-            // let table_names = Vec::new();
-            for cell_off_set in cell_ptr_array {
-                let _ = get_record_in_cell(0, cell_off_set, &mut file);
+            let page_offset = 0;
+            let mut table_names = Vec::new();
+            for cell_offset in cell_ptr_array {
+                let tbl_name_bytes = get_record_in_cell(page_offset, cell_offset, &mut file)?;
+                table_names.push(String::from_utf8(tbl_name_bytes)?);
             }
+            // println!("{table_names:?}");
+            let mut output_str = String::new();
+            for tbl_name in &table_names[..&table_names.len() - 1] {
+                output_str.push_str(&tbl_name);
+                output_str.push(' ');
+            }
+            output_str.push_str(&table_names[&table_names.len() - 1]);
+            println!("{output_str}");
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
@@ -68,7 +87,7 @@ fn main() -> Result<()> {
 /// And codecrafters add: "The offsets are relative to the start of the page".
 fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Result<Vec<u16>> {
     let nb_cells: u16 = u16::from_be_bytes([header[3], header[4]]);
-    println!("#cells: {nb_cells}");
+    // println!("#cells: {nb_cells}");
 
     let mut offsets_array_buff: Vec<u8> = vec![0; (2 * nb_cells).into()];
     b_tree_page_content.read_exact(&mut offsets_array_buff)?;
@@ -90,20 +109,18 @@ fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Resul
 // - rowid (varint)
 // - 'record'
 // Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
-fn get_record_in_cell(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<()> {
-    let (cell_size, _) = parse_varint((page_offset + cell_offset) as u64, db)?;
-    dbg!(cell_size);
+fn get_record_in_cell(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<Vec<u8>> {
+    let mut offset = (page_offset + cell_offset) as u64;
 
-    // println!("---\n");
-    //
-    // // Next, skipping over the rowid as we don't need to parse it for now
-    // // this will get us to the _record_
-    // while msb {
-    //     reader.read_exact(&mut varint_byte)?;
-    //     msb = ((varint_byte[0] >> 7) & 0b1) == 1;
-    // }
+    let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
+    // dbg!(cell_size);
 
-    // Now the reader cursor is at the record.
+    // Next, the rowid
+    offset += cell_varint_size as u64;
+    let (_rowid, rowid_varint_size) = parse_varint(offset, db)?;
+    // dbg!(rowid);
+
+    // Now the record.
     // The record is composed of a header and a body
     // - header:
     //   - its size
@@ -113,13 +130,76 @@ fn get_record_in_cell(page_offset: u16, cell_offset: u16, db: &mut File) -> Resu
     // For the sql schema table: https://www.sqlite.org/schematab.html
     // rows are: type, name, tbl_name, rootpage and sql
 
-    // Reading the record header size (varint)
+    offset += rowid_varint_size as u64;
 
-    Ok(())
+    // Reading the record header size (varint)
+    let (header_size, header_size_varint) = parse_varint(offset, db)?;
+    // dbg!(header_size);
+
+    // Array of the serial types
+    let mut columns_serial_types = [0; 5];
+
+    let mut header_read_size = header_size_varint as u64; // we already read the bytes for the header-size varint itself
+    offset += header_read_size;
+    let mut col_idx = 0;
+    while header_read_size < header_size as u64 {
+        assert!(col_idx < columns_serial_types.len());
+
+        let (serial_type, varint_size) = parse_varint(offset, db)?;
+
+        columns_serial_types[col_idx] = serial_type;
+
+        offset += varint_size as u64;
+        header_read_size += varint_size as u64;
+        col_idx += 1;
+    }
+
+    // dbg!(columns_serial_types);
+
+    // Map the serial types to the byte length they encode
+    let columns_byte_lengths =
+        columns_serial_types.map(|s| serial_type_2_byte_length(s).expect("valid serial type"));
+    // dbg!(columns_byte_lengths);
+
+    // Now, reading the record body. We want to read the value for the tbl_name column
+    // 'tbl_name' is the 3rd column
+
+    // The offset to the 3rd column value: after the first 2 column values
+    offset += columns_byte_lengths[0] + columns_byte_lengths[1]; // skipping over the first two
+                                                                 // dbg!(offset);
+
+    // Reading the 3rd column (tbl_name) value
+    // NOTE: 3rd column -> table_name column.
+    // See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
+    let mut tbl_name_value = Vec::new();
+    tbl_name_value.resize(columns_byte_lengths[2] as usize, 0);
+    //columns_byte_lengths[2] as usize);
+
+    // let mut tbl_name_value = [0; 7];
+
+    db.seek(SeekFrom::Start(offset))?;
+
+    db.read_exact(&mut tbl_name_value)?;
+
+    // let mut nb_reads = 0;
+    // while tbl_name_value.len() < columns_byte_lengths[2] as usize {
+    //     dbg!("try read");
+    //     db.read_exact(&mut tbl_name_value)?;
+    //     nb_reads += 1;
+    //     if nb_reads == 10 {
+    //         bail!("Too many reads to get the table name value")
+    //     }
+    // }
+
+    // dbg!(&tbl_name_value);
+    // println!("{:x?}", tbl_name_value);
+
+    Ok(tbl_name_value)
 }
-fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
-    todo!()
-}
+
+// fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
+//     todo!()
+// }
 
 // Reads the varint using the Reader starting from the given offset.
 // Will used buffer reads to read 1 byte at a time the varint.
@@ -128,8 +208,8 @@ fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
 // - the parsed varint as a u64
 // - the size in bytes of the varint encoding
 fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, usize)> {
-    println!("\n\n---");
-    dbg!(offset);
+    // println!("\n\n---");
+    // dbg!(offset);
 
     reader.seek(SeekFrom::Start(offset))?;
     let mut buf_reader = BufReader::new(reader);
@@ -145,14 +225,14 @@ fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, us
     while msb {
         buf_reader.read_exact(&mut varint_byte)?;
 
-        println!("Varint byte #{idx} hex: {varint_byte:x?}");
+        // println!("Varint byte #{idx} hex: {varint_byte:x?}");
         // update MSB
         msb = ((varint_byte[0] >> 7) & 0b1) == 1;
-        dbg!(msb);
+        // dbg!(msb);
 
         // drop the MSB
         let byte_without_msb = varint_byte[0] & 0b01111111;
-        dbg!(byte_without_msb);
+        // dbg!(byte_without_msb);
         // add this byte to the varint bytes we already read
         varint_bytes[idx] = byte_without_msb;
         idx += 1;
@@ -163,10 +243,22 @@ fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, us
         .expect("slice should have 8 bytes");
     let parsed_varint = u64::from_le_bytes(le_bytes);
 
-    dbg!(parsed_varint);
-    println!("---\n\n");
+    // dbg!(parsed_varint);
+    // println!("---\n\n");
 
     return Ok((parsed_varint, idx));
+}
+
+fn serial_type_2_byte_length(serial_type: u64) -> Result<u64> {
+    match serial_type {
+        0..5 => Ok(serial_type),
+        5 => Ok(6),
+        6 | 7 => Ok(8),
+        8 | 9 => Ok(0),
+        n if n >= 12 && n.rem_euclid(2) == 0 => Ok((n - 12) / 2),
+        n if n >= 13 && n.rem_euclid(2) == 1 => Ok((n - 13) / 2),
+        _ => bail!("Bad serial type: {}", serial_type),
+    }
 }
 
 // Hex notes
