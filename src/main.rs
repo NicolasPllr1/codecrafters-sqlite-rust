@@ -1,6 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
+
 use std::fs::File;
 use std::io::{prelude::*, BufReader, SeekFrom};
+use std::str::FromStr;
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -44,7 +46,10 @@ fn main() -> Result<()> {
 
             file.seek(SeekFrom::Start(db_header_size))?;
 
-            let table_names = get_tables_names_from_sqlite_schema_table(&mut file)?;
+            let table_names: Vec<String> = parse_schema_table(&mut file)?
+                .into_iter()
+                .map(|row| row.tbl_name)
+                .collect();
 
             let mut output_str = String::new();
             for tbl_name in &table_names[..&table_names.len() - 1] {
@@ -54,9 +59,47 @@ fn main() -> Result<()> {
             output_str.push_str(&table_names[&table_names.len() - 1]);
             println!("{output_str}");
         }
+        sql_query if sql_query.len() > 0 => {
+            println!("Input query: {sql_query}");
+            let sql_query = pseudo_sql_query_parsing(sql_query)?;
+            dbg!(&sql_query);
+
+            let mut db_file = File::open(&args[1])?;
+            handle_sql_query(&sql_query, &mut db_file)?;
+        }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
 
+    Ok(())
+}
+
+#[derive(Debug)]
+enum SQLQuery {
+    CountRows(String), // count rows in a table. The string hold the table name.
+}
+
+fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery> {
+    // Only 'parsing' for this query: 'SELECT COUNT(*) FROM xxx'
+    let min_len = "SELECT COUNT(*) FROM ".len();
+    if sql_query.len() > min_len {
+        return Ok(SQLQuery::CountRows(sql_query[min_len..].to_string()));
+    } else {
+        bail!("Expect query of the form: SELECT COUNT(*) FROM xxx'");
+    }
+}
+
+fn handle_sql_query(sql_query: &SQLQuery, db: &mut (impl Read + Seek)) -> Result<()> {
+    match sql_query {
+        SQLQuery::CountRows(query) => {
+            // Skipping the database header
+            let db_header_size = 100;
+
+            db.seek(SeekFrom::Start(db_header_size))?;
+
+            let table_rows = parse_schema_table(db)?;
+            dbg!(table_rows);
+        }
+    }
     Ok(())
 }
 
@@ -86,9 +129,40 @@ fn get_cell_ptr_array(
     Ok(offsets_array)
 }
 
-/// Parse the 'sql_schema' table for the database tables names.
+#[derive(Debug)]
+enum ObjectType {
+    Table,
+    Index,
+    View,
+    Trigger,
+}
+
+impl FromStr for ObjectType {
+    type Err = ();
+
+    fn from_str(input: &str) -> Result<ObjectType, Self::Err> {
+        match input {
+            "table" => Ok(ObjectType::Table),
+            "index" => Ok(ObjectType::Index),
+            "view" => Ok(ObjectType::View),
+            "trigger" => Ok(ObjectType::Trigger),
+            _ => Err(()),
+        }
+    }
+}
+
+/// https://www.sqlite.org/schematab.html
+#[derive(Debug)]
+struct SchemaTableRow {
+    object_type: ObjectType,
+    name: String,
+    tbl_name: String,
+    root_page: u8,
+    sql: String,
+}
+/// Parse the 'sql_schema' table.
 /// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
-fn get_tables_names_from_sqlite_schema_table(db: &mut (impl Read + Seek)) -> Result<Vec<String>> {
+fn parse_schema_table(db: &mut (impl Read + Seek)) -> Result<Vec<SchemaTableRow>> {
     // Reading the 'sqlite_schema' table
 
     // Reading its header
@@ -101,13 +175,13 @@ fn get_tables_names_from_sqlite_schema_table(db: &mut (impl Read + Seek)) -> Res
     // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
 
     let page_offset = 0;
-    let mut table_names = Vec::new();
+    let mut sql_schema_rows = Vec::new();
     for cell_offset in cell_ptr_array {
-        let tbl_name_bytes = get_table_name(page_offset, cell_offset, db)?;
-        table_names.push(String::from_utf8(tbl_name_bytes)?);
+        let row = get_table_name(page_offset, cell_offset, db)?;
+        sql_schema_rows.push(row);
     }
 
-    Ok(table_names)
+    Ok(sql_schema_rows)
 }
 
 /// Get the table name raw bytes from the corresponding cell data in the sql schema table.
@@ -123,7 +197,7 @@ fn get_table_name(
     page_offset: u16,
     cell_offset: u16,
     db: &mut (impl Read + Seek),
-) -> Result<Vec<u8>> {
+) -> Result<SchemaTableRow> {
     let mut offset = (page_offset + cell_offset) as u64;
 
     let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
@@ -159,32 +233,70 @@ fn get_table_name(
     let columns_byte_lengths =
         columns_serial_types.map(|s| serial_type_2_byte_length(s).expect("valid serial type"));
 
-    // Now, reading the record body. We want to read the value for the tbl_name column
-    // 'tbl_name' is the 3rd column
+    // NOTE: odd -> encode text (https://sqlite.org/fileformat2.html#record_format)
+    // Will check this before trying to parse bytes as utf-8
 
-    // The offset to the 3rd column value: after the first 2 column values
-    offset += columns_byte_lengths[0] + columns_byte_lengths[1]; // skipping over the first two
-
-    // Reading the 3rd column (tbl_name) value
-    // NOTE: 3rd column -> table_name column.
-    // See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
-    let mut tbl_name_value = Vec::new();
-    tbl_name_value.resize(columns_byte_lengths[2] as usize, 0);
-    //columns_byte_lengths[2] as usize);
-
-    // let mut tbl_name_value = [0; 7];
-
+    // Reading the record body:
     db.seek(SeekFrom::Start(offset))?;
 
-    db.read_exact(&mut tbl_name_value)?;
+    // 1st column: 'type'
+    let mut obj_type_bytes = Vec::new();
+    obj_type_bytes.resize(columns_byte_lengths[0] as usize, 0);
+    db.read_exact(&mut obj_type_bytes)?;
+    assert!(columns_serial_types[0].rem_euclid(2) == 1);
+    let object_type = ObjectType::from_str(&String::from_utf8(obj_type_bytes)?)
+        .map_err(|e| anyhow!("bad object type: {e:?}"))?;
 
-    Ok(tbl_name_value)
+    // 2nd column: 'name'
+    let mut name_bytes = Vec::new();
+    name_bytes.resize(columns_byte_lengths[1] as usize, 0);
+    db.read_exact(&mut name_bytes)?;
+    assert!(columns_serial_types[1].rem_euclid(2) == 1);
+    let name = String::from_utf8(name_bytes)?;
+
+    // 3rd column: 'tbl_name'
+    let mut tbl_name_bytes = Vec::new();
+    tbl_name_bytes.resize(columns_byte_lengths[2] as usize, 0);
+    db.read_exact(&mut tbl_name_bytes)?;
+    assert!(columns_serial_types[2].rem_euclid(2) == 1);
+    let tbl_name = String::from_utf8(tbl_name_bytes)?;
+
+    // 4th column: 'rootpage'
+    let mut rootpage_bytes = Vec::new();
+    rootpage_bytes.resize(columns_byte_lengths[3] as usize, 0);
+
+    assert!(columns_byte_lengths[3] == 1); // TODO: add support for serial types 0..9.
+                                           // Currently, assuming the serial type is 1,
+                                           // i.e., that the root page is a u8 (1 byte
+                                           // integer)
+
+    db.read_exact(&mut rootpage_bytes)?;
+    let be_bytes: [u8; 1] = rootpage_bytes[..1]
+        .try_into()
+        .expect("slice should have 8 bytes");
+    let root_page = u8::from_be_bytes(be_bytes);
+
+    // TODO: fix invalid utf-8 when extractig the sql column
+    // // 5th column: 'sql'
+    // let mut sql_bytes = Vec::new();
+    // sql_bytes.resize(columns_byte_lengths[4] as usize, 1);
+    // // dbg!(columns_serial_types[4]);
+    // db.read_exact(&mut sql_bytes)?;
+    //
+    // assert!(columns_serial_types[4].rem_euclid(2) == 1);
+    // // dbg!(&sql_bytes);
+    // let sql = String::from_utf8(sql_bytes)?;
+    let sql = String::new();
+
+    Ok(SchemaTableRow {
+        object_type,
+        name,
+        tbl_name,
+        root_page,
+        sql,
+    })
 }
 
-/// fn tbl_name_from_record(record: Vec<u8>) -> Result<String> {
-///     todo!()
-/// }
-///
 /// Reads the varint using the Reader starting from the given offset.
 /// Will used buffer reads to read 1 byte at a time the varint.
 ///
