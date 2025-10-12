@@ -71,7 +71,7 @@ fn main() -> Result<()> {
             let page_offset = 0;
             let mut table_names = Vec::new();
             for cell_offset in cell_ptr_array {
-                let tbl_name_bytes = get_record_in_cell(page_offset, cell_offset, &mut file)?;
+                let tbl_name_bytes = get_table_name(page_offset, cell_offset, &mut file)?;
                 table_names.push(String::from_utf8(tbl_name_bytes)?);
             }
             let mut output_str = String::new();
@@ -111,12 +111,16 @@ fn get_cell_ptr_array(header: &[u8; 8], b_tree_page_content: &mut File) -> Resul
     Ok(offsets_array)
 }
 
-// Get the record bytes from the cell data. Cell structure:
+// Get the table name raw bytes from the corresponding cell data in the sql schema table.
+//
+// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
+//
+// Cell structure:
 // - cell size (varint): 'the total number of bytes of payload, including any overflow'
 // - rowid (varint)
 // - 'record'
 // Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
-fn get_record_in_cell(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<Vec<u8>> {
+fn get_table_name(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<Vec<u8>> {
     let mut offset = (page_offset + cell_offset) as u64;
 
     let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
