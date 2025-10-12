@@ -20,7 +20,6 @@ fn main() -> Result<()> {
 
             // 'The page size for a database file is determined by the 2-byte integer located at an offset of 16 bytes from the beginning of the database file.'
 
-            #[allow(unused_variables)]
             let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
 
             println!("database page size: {}", page_size);
@@ -39,34 +38,22 @@ fn main() -> Result<()> {
         }
         ".tables" => {
             let mut file = File::open(&args[1])?;
-            let mut db_header = [0; 100];
-            file.read_exact(&mut db_header)?;
 
-            // 'The page size for a database file is determined by the 2-byte integer located at an offset of 16 bytes from the beginning of the database file.'
+            // Skipping the database header
+            let db_header_size = 100;
 
-            #[allow(unused_variables)]
-            let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
-            // Next, reading the 'sqlite_schema' table
+            file.seek(SeekFrom::Start(db_header_size))?;
+
+            // Reading the 'sqlite_schema' table
 
             // Reading its header
             // 'The two-byte integer at offset 3 gives the number of cells on the page.'
             let mut sqlite_schema_table_header = [0; 8];
             file.read_exact(&mut sqlite_schema_table_header)?;
 
-            // Extraction info from this  'sqlite_schema' table _header_
-
-            let _nb_tables =
-                u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
-
-            // 'The two-byte integer at offset 5 designates the start of the cell content area.
-            // A zero value for this integer is interpreted as 65536.'
-            let _cell_content_area_start =
-                u16::from_be_bytes([sqlite_schema_table_header[5], sqlite_schema_table_header[6]]);
-
             let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, &mut file)?;
 
             // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
-            // let sqlite_page_offset = 100; // it's right after the database header
 
             let page_offset = 0;
             let mut table_names = Vec::new();
