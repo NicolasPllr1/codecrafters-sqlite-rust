@@ -55,7 +55,7 @@ fn main() -> Result<()> {
 
             // Extraction info from this  'sqlite_schema' table _header_
 
-            let nb_tables =
+            let _nb_tables =
                 u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
 
             // 'The two-byte integer at offset 5 designates the start of the cell content area.
