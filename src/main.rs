@@ -129,16 +129,6 @@ fn get_table_name(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<V
     offset += cell_varint_size as u64;
     let (_rowid, rowid_varint_size) = parse_varint(offset, db)?;
 
-    // Now the record.
-    // The record is composed of a header and a body
-    // - header:
-    //   - its size
-    //   - serial numbers
-    // - body:
-    //   - values for each column. Immediatly follows the header.
-    // For the sql schema table: https://www.sqlite.org/schematab.html
-    // rows are: type, name, tbl_name, rootpage and sql
-
     offset += rowid_varint_size as u64;
 
     // Reading the record header size (varint)
@@ -184,15 +174,6 @@ fn get_table_name(page_offset: u16, cell_offset: u16, db: &mut File) -> Result<V
     db.seek(SeekFrom::Start(offset))?;
 
     db.read_exact(&mut tbl_name_value)?;
-
-    // let mut nb_reads = 0;
-    // while tbl_name_value.len() < columns_byte_lengths[2] as usize {
-    //     db.read_exact(&mut tbl_name_value)?;
-    //     nb_reads += 1;
-    //     if nb_reads == 10 {
-    //         bail!("Too many reads to get the table name value")
-    //     }
-    // }
 
     Ok(tbl_name_value)
 }
