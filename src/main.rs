@@ -60,9 +60,7 @@ fn main() -> Result<()> {
             println!("{output_str}");
         }
         sql_query if sql_query.len() > 0 => {
-            println!("Input query: {sql_query}");
             let sql_query = pseudo_sql_query_parsing(sql_query)?;
-            dbg!(&sql_query);
 
             let mut db_file = File::open(&args[1])?;
             handle_sql_query(&sql_query, &mut db_file)?;
@@ -90,14 +88,40 @@ fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery> {
 
 fn handle_sql_query(sql_query: &SQLQuery, db: &mut (impl Read + Seek)) -> Result<()> {
     match sql_query {
-        SQLQuery::CountRows(query) => {
+        SQLQuery::CountRows(target_tbl_name) => {
             // Skipping the database header
             let db_header_size = 100;
 
             db.seek(SeekFrom::Start(db_header_size))?;
 
             let table_rows = parse_schema_table(db)?;
-            dbg!(table_rows);
+
+            let target_table_row = table_rows
+                .iter()
+                .find(|&r| r.tbl_name == *target_tbl_name)
+                .expect(&format!(
+                    "Could not find table with name '{target_tbl_name}'"
+                ));
+
+            // Get the database page size
+            // This info is in the database header, at offset [16, 18]
+            db.seek(SeekFrom::Start(16))?;
+            let mut page_size_be_bytes = [0; 2];
+            db.read_exact(&mut page_size_be_bytes)?;
+            let page_size = u16::from_be_bytes(page_size_be_bytes);
+
+            // Get to correct page in the db
+            let table_page_offset = page_size * (target_table_row.root_page - 1) as u16;
+            db.seek(SeekFrom::Start(table_page_offset as u64))?;
+
+            // Read the page header
+            let mut table_header_bytes = [0; 8];
+            db.read_exact(&mut table_header_bytes)?;
+
+            // Extract the number of cells ~ the number of rows
+            let nb_cells = u16::from_be_bytes([table_header_bytes[3], table_header_bytes[4]]);
+
+            println!("{nb_cells}");
         }
     }
     Ok(())
@@ -154,11 +178,11 @@ impl FromStr for ObjectType {
 /// https://www.sqlite.org/schematab.html
 #[derive(Debug)]
 struct SchemaTableRow {
-    object_type: ObjectType,
-    name: String,
+    _object_type: ObjectType,
+    _name: String,
     tbl_name: String,
     root_page: u8,
-    sql: String,
+    _sql: String,
 }
 /// Parse the 'sql_schema' table.
 /// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
@@ -289,11 +313,11 @@ fn get_table_name(
     let sql = String::new();
 
     Ok(SchemaTableRow {
-        object_type,
-        name,
+        _object_type: object_type,
+        _name: name,
         tbl_name,
         root_page,
-        sql,
+        _sql: sql,
     })
 }
 
