@@ -20,20 +20,17 @@ fn main() -> Result<()> {
             let mut db_header = [0; 100];
             file.read_exact(&mut db_header)?;
 
-            // 'The page size for a database file is determined by the 2-byte integer located at an offset of 16 bytes from the beginning of the database file.'
-
+            // 'The page size for a database file is determined by the 2-byte integer located
+            // at an offset of 16 bytes from the beginning of the database file.'
             let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
 
             println!("database page size: {}", page_size);
-            // Next, reading the 'sqlite_schema' table
 
-            // Reading its header
-            // 'The two-byte integer at offset 3 gives the number of cells on the page.'
+            // Next, reading the 'sqlite_schema' table header
             let mut sqlite_schema_table_header = [0; 8];
             file.read_exact(&mut sqlite_schema_table_header)?;
 
-            // Extraction info from this  'sqlite_schema' table _header_
-
+            // 'The two-byte integer at offset 3 gives the number of cells on the page.'
             let nb_tables =
                 u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
             println!("number of tables: {}", nb_tables);
@@ -73,7 +70,14 @@ fn main() -> Result<()> {
 
 #[derive(Debug)]
 enum SQLQuery {
-    CountRows(String), // count rows in a table. The string hold the table name.
+    CountRows(String),       // count rows in a table. The string hold the table name.
+    Select(SelectQueryData), // SELECT name FROM apples
+}
+
+#[derive(Debug)]
+struct SelectQueryData {
+    table_name: String,
+    column_name: String,
 }
 
 fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery> {
