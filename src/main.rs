@@ -1,15 +1,28 @@
-use anyhow::{anyhow, bail, Result};
+use thiserror::Error;
 
 use std::fs::File;
+use std::io;
 use std::io::{prelude::*, BufReader, SeekFrom};
 use std::str::FromStr;
 
-fn main() -> Result<()> {
+#[derive(Error, Debug)]
+pub enum SQLiteError {
+    #[error("can't open the database file")]
+    CantOpen(#[from] io::Error),
+    #[error("{}", .0)]
+    SQLiteQueryError(#[from] SQLQueryError),
+    #[error("Query parsing error: {}", .0)]
+    QueryParsingError(#[from] SQLQueryParsingError),
+    #[error("Internal error: {}", .0)]
+    InternalError(#[from] SQLiteInternalError),
+}
+
+fn main() -> Result<(), SQLiteError> {
     // Parse arguments
     let args = std::env::args().collect::<Vec<_>>();
     match args.len() {
-        0 | 1 => bail!("Missing <database path> and <command>"),
-        2 => bail!("Missing <command>"),
+        0 | 1 => panic!("Missing <database path> and <command>"),
+        2 => panic!("Missing <command>"),
         _ => {}
     }
 
@@ -62,7 +75,7 @@ fn main() -> Result<()> {
             let mut db_file = File::open(&args[1])?;
             handle_sql_query(&sql_query, &mut db_file)?;
         }
-        _ => bail!("Missing or invalid command passed: {}", command),
+        _ => panic!("Missing or invalid command passed: {}", command),
     }
 
     Ok(())
@@ -70,33 +83,54 @@ fn main() -> Result<()> {
 
 #[derive(Debug)]
 enum SQLQuery {
-    CountRows(String),       // count rows in a table. The string hold the table name.
-    Select(SelectQueryData), // SELECT name FROM apples
+    CountRows(String), // count rows in a table. The string hold the table name.
+                       // Select(SelectQueryData), // SELECT name FROM apples
 }
 
-#[derive(Debug)]
-struct SelectQueryData {
-    table_name: String,
-    column_name: String,
-}
+// #[derive(Debug)]
+// struct SelectQueryData {
+//     table_name: String,
+//     column_name: String,
+// }
 
-fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery> {
+// Box<dyn std::error::Error>
+
+#[derive(Debug, Error)]
+pub enum SQLQueryParsingError {
+    #[error("Only 'SELECT COUNT(*) FROM xxx' is supported, got: {}", .0)]
+    BadQuery(String),
+}
+fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsingError> {
     // Only 'parsing' for this query: 'SELECT COUNT(*) FROM xxx'
     let min_len = "SELECT COUNT(*) FROM ".len();
     if sql_query.len() > min_len {
         return Ok(SQLQuery::CountRows(sql_query[min_len..].to_string()));
     } else {
-        bail!("Expect query of the form: SELECT COUNT(*) FROM xxx'");
+        Err(SQLQueryParsingError::BadQuery(sql_query.to_string()))
     }
 }
 
-fn handle_sql_query(sql_query: &SQLQuery, db: &mut (impl Read + Seek)) -> Result<()> {
+#[derive(Debug, Error)]
+pub enum SQLQueryError {
+    #[error("Invalid SQL query: {}", .0)]
+    InvalidSQL(String),
+    #[error("SQL query not implemented yet: {}", .0)]
+    NotImplementedYet(String),
+    #[error("Internal error: {}", .0)]
+    InternalError(#[from] SQLiteInternalError),
+}
+
+fn handle_sql_query(
+    sql_query: &SQLQuery,
+    db: &mut (impl Read + Seek),
+) -> Result<(), SQLQueryError> {
     match sql_query {
         SQLQuery::CountRows(target_tbl_name) => {
             // Skipping the database header
             let db_header_size = 100;
 
-            db.seek(SeekFrom::Start(db_header_size))?;
+            db.seek(SeekFrom::Start(db_header_size))
+                .map_err(|e| SQLiteInternalError::SeekError(e))?;
 
             let table_rows = parse_schema_table(db)?;
 
@@ -109,26 +143,46 @@ fn handle_sql_query(sql_query: &SQLQuery, db: &mut (impl Read + Seek)) -> Result
 
             // Get the database page size
             // This info is in the database header, at offset [16, 18]
-            db.seek(SeekFrom::Start(16))?;
+            db.seek(SeekFrom::Start(16))
+                .map_err(|e| SQLiteInternalError::SeekError(e))?;
             let mut page_size_be_bytes = [0; 2];
-            db.read_exact(&mut page_size_be_bytes)?;
+            db.read_exact(&mut page_size_be_bytes)
+                .map_err(|e| SQLiteInternalError::ReadError(e))?;
             let page_size = u16::from_be_bytes(page_size_be_bytes);
 
             // Get to correct page in the db
             let table_page_offset = page_size * (target_table_row.root_page - 1) as u16;
-            db.seek(SeekFrom::Start(table_page_offset as u64))?;
+            db.seek(SeekFrom::Start(table_page_offset as u64))
+                .map_err(|e| SQLiteInternalError::SeekError(e))?;
 
             // Read the page header
             let mut table_header_bytes = [0; 8];
-            db.read_exact(&mut table_header_bytes)?;
+            db.read_exact(&mut table_header_bytes)
+                .map_err(|e| SQLiteInternalError::ReadError(e))?;
 
             // Extract the number of cells ~ the number of rows
             let nb_cells = u16::from_be_bytes([table_header_bytes[3], table_header_bytes[4]]);
 
             println!("{nb_cells}");
-        }
+        } // _ => panic!("Query not implemented yet"),
     }
     Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum SQLiteInternalError {
+    #[error("Could not seek db file from start to offset: {:?}", .0)]
+    SeekError(io::Error),
+    #[error("Db file read error: {:?}", .0)]
+    ReadError(io::Error),
+    #[error("Failed to convert parsed varint to u64")]
+    VarIntConversionFail,
+    #[error("Invalid UTF-8: {:?}", .0)]
+    InvalidUTF8(#[from] std::string::FromUtf8Error),
+    #[error("Found bad object type: {}", .0)]
+    FoundBadObjectType(String),
+    #[error("{}", .0)]
+    SerialTypeError(#[from] SerialTypeError),
 }
 
 /// Varint:
@@ -139,11 +193,13 @@ fn handle_sql_query(sql_query: &SQLQuery, db: &mut (impl Read + Seek)) -> Result
 fn get_cell_ptr_array(
     header: &[u8; 8],
     b_tree_page_content: &mut (impl Read + Seek),
-) -> Result<Vec<u16>> {
+) -> Result<Vec<u16>, SQLiteInternalError> {
     let nb_cells: u16 = u16::from_be_bytes([header[3], header[4]]);
 
     let mut offsets_array_buff: Vec<u8> = vec![0; (2 * nb_cells).into()];
-    b_tree_page_content.read_exact(&mut offsets_array_buff)?;
+    b_tree_page_content
+        .read_exact(&mut offsets_array_buff)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
 
     let offsets_array: Vec<u16> = offsets_array_buff
         .chunks_exact(2)
@@ -166,7 +222,7 @@ enum ObjectType {
 }
 
 impl FromStr for ObjectType {
-    type Err = ();
+    type Err = String;
 
     fn from_str(input: &str) -> Result<ObjectType, Self::Err> {
         match input {
@@ -174,7 +230,7 @@ impl FromStr for ObjectType {
             "index" => Ok(ObjectType::Index),
             "view" => Ok(ObjectType::View),
             "trigger" => Ok(ObjectType::Trigger),
-            _ => Err(()),
+            _ => Err("Invalid object type: {input}".to_string()),
         }
     }
 }
@@ -190,13 +246,16 @@ struct SchemaTableRow {
 }
 /// Parse the 'sql_schema' table.
 /// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
-fn parse_schema_table(db: &mut (impl Read + Seek)) -> Result<Vec<SchemaTableRow>> {
+fn parse_schema_table(
+    db: &mut (impl Read + Seek),
+) -> Result<Vec<SchemaTableRow>, SQLiteInternalError> {
     // Reading the 'sqlite_schema' table
 
     // Reading its header
     // 'The two-byte integer at offset 3 gives the number of cells on the page.'
     let mut sqlite_schema_table_header = [0; 8];
-    db.read_exact(&mut sqlite_schema_table_header)?;
+    db.read_exact(&mut sqlite_schema_table_header)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
 
     let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, db)?;
 
@@ -225,7 +284,7 @@ fn get_table_name(
     page_offset: u16,
     cell_offset: u16,
     db: &mut (impl Read + Seek),
-) -> Result<SchemaTableRow> {
+) -> Result<SchemaTableRow, SQLiteInternalError> {
     let mut offset = (page_offset + cell_offset) as u64;
 
     let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
@@ -258,34 +317,42 @@ fn get_table_name(
     }
 
     // Map the serial types to the byte length they encode
-    let columns_byte_lengths =
-        columns_serial_types.map(|s| serial_type_2_byte_length(s).expect("valid serial type"));
+    let columns_byte_lengths = columns_serial_types
+        .iter()
+        .map(|&s| serial_type_2_byte_length(s))
+        .collect::<Result<Vec<_>, SerialTypeError>>()?;
 
     // NOTE: odd -> encode text (https://sqlite.org/fileformat2.html#record_format)
     // Will check this before trying to parse bytes as utf-8
 
     // Reading the record body:
-    db.seek(SeekFrom::Start(offset))?;
+    db.seek(SeekFrom::Start(offset))
+        .map_err(|e| SQLiteInternalError::SeekError(e))?;
 
     // 1st column: 'type'
     let mut obj_type_bytes = Vec::new();
     obj_type_bytes.resize(columns_byte_lengths[0] as usize, 0);
-    db.read_exact(&mut obj_type_bytes)?;
+    db.read_exact(&mut obj_type_bytes)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+
     assert!(columns_serial_types[0].rem_euclid(2) == 1);
     let object_type = ObjectType::from_str(&String::from_utf8(obj_type_bytes)?)
-        .map_err(|e| anyhow!("bad object type: {e:?}"))?;
+        .map_err(|e| SQLiteInternalError::FoundBadObjectType(e))?;
 
     // 2nd column: 'name'
     let mut name_bytes = Vec::new();
     name_bytes.resize(columns_byte_lengths[1] as usize, 0);
-    db.read_exact(&mut name_bytes)?;
+    db.read_exact(&mut name_bytes)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
     assert!(columns_serial_types[1].rem_euclid(2) == 1);
     let name = String::from_utf8(name_bytes)?;
 
     // 3rd column: 'tbl_name'
     let mut tbl_name_bytes = Vec::new();
     tbl_name_bytes.resize(columns_byte_lengths[2] as usize, 0);
-    db.read_exact(&mut tbl_name_bytes)?;
+    db.read_exact(&mut tbl_name_bytes)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+
     assert!(columns_serial_types[2].rem_euclid(2) == 1);
     let tbl_name = String::from_utf8(tbl_name_bytes)?;
 
@@ -298,7 +365,8 @@ fn get_table_name(
                                            // i.e., that the root page is a u8 (1 byte
                                            // integer)
 
-    db.read_exact(&mut rootpage_bytes)?;
+    db.read_exact(&mut rootpage_bytes)
+        .map_err(|e| SQLiteInternalError::ReadError(e))?;
     let be_bytes: [u8; 1] = rootpage_bytes[..1]
         .try_into()
         .expect("slice should have 8 bytes");
@@ -331,8 +399,13 @@ fn get_table_name(
 /// Returns:
 /// - the parsed varint as a u64
 // - the size in bytes of the varint encoding
-fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, usize)> {
-    reader.seek(SeekFrom::Start(offset))?;
+fn parse_varint(
+    offset: u64,
+    reader: &mut (impl Read + Seek),
+) -> Result<(u64, usize), SQLiteInternalError> {
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| SQLiteInternalError::SeekError(e))?;
     let mut buf_reader = BufReader::new(reader);
 
     // Parsing the varint
@@ -344,7 +417,9 @@ fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, us
                               // next byte
     let mut varint_byte = [0; 1];
     while msb {
-        buf_reader.read_exact(&mut varint_byte)?;
+        buf_reader
+            .read_exact(&mut varint_byte)
+            .map_err(|e| SQLiteInternalError::ReadError(e))?;
 
         // update MSB
         msb = ((varint_byte[0] >> 7) & 0b1) == 1;
@@ -356,15 +431,21 @@ fn parse_varint(offset: u64, reader: &mut (impl Read + Seek)) -> Result<(u64, us
         idx += 1;
     }
     assert!(varint_bytes[varint_bytes.len() - 1] == 0);
+
     let le_bytes: [u8; 8] = varint_bytes[..8]
         .try_into()
-        .expect("slice should have 8 bytes");
+        .map_err(|_| SQLiteInternalError::VarIntConversionFail)?;
     let parsed_varint = u64::from_le_bytes(le_bytes);
 
     return Ok((parsed_varint, idx));
 }
 
-fn serial_type_2_byte_length(serial_type: u64) -> Result<u64> {
+#[derive(Debug, Error)]
+pub enum SerialTypeError {
+    #[error("Could not convert serial type: {:?}", .0)]
+    BadSerialNumber(u64),
+}
+fn serial_type_2_byte_length(serial_type: u64) -> Result<u64, SerialTypeError> {
     match serial_type {
         0..5 => Ok(serial_type),
         5 => Ok(6),
@@ -372,7 +453,7 @@ fn serial_type_2_byte_length(serial_type: u64) -> Result<u64> {
         8 | 9 => Ok(0),
         n if n >= 12 && n.rem_euclid(2) == 0 => Ok((n - 12) / 2),
         n if n >= 13 && n.rem_euclid(2) == 1 => Ok((n - 13) / 2),
-        _ => bail!("Bad serial type: {}", serial_type),
+        _ => Err(SerialTypeError::BadSerialNumber(serial_type)),
     }
 }
 
