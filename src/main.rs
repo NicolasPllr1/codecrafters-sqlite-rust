@@ -304,7 +304,7 @@ fn get_table_name(
     let mut header_read_size = header_size_varint as u64; // we already read the bytes for the header-size varint itself
     offset += header_read_size;
     let mut col_idx = 0;
-    while header_read_size < header_size as u64 {
+    while header_read_size < header_size {
         assert!(col_idx < columns_serial_types.len());
 
         let (serial_type, varint_size) = parse_varint(offset, db)?;
