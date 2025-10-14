@@ -63,7 +63,7 @@ fn main() -> Result<(), SQLiteError> {
 
             let mut output_str = String::new();
             for tbl_name in &table_names[..&table_names.len() - 1] {
-                output_str.push_str(&tbl_name);
+                output_str.push_str(tbl_name);
                 output_str.push(' ');
             }
             output_str.push_str(&table_names[&table_names.len() - 1]);
