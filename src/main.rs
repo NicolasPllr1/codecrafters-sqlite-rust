@@ -279,7 +279,7 @@ fn parse_schema_table(
 /// - cell size (varint): 'the total number of bytes of payload, including any overflow'
 /// - rowid (varint)
 /// - 'record'
-/// Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
+///   Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
 fn get_table_name(
     page_offset: u16,
     cell_offset: u16,
