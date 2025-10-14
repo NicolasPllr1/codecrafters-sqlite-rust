@@ -69,7 +69,7 @@ fn main() -> Result<(), SQLiteError> {
             output_str.push_str(&table_names[&table_names.len() - 1]);
             println!("{output_str}");
         }
-        sql_query if sql_query.len() > 0 => {
+        sql_query if !sql_query.is_empty() => {
             let sql_query = pseudo_sql_query_parsing(sql_query)?;
 
             let mut db_file = File::open(&args[1])?;
