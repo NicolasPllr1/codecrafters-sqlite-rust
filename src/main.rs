@@ -104,7 +104,7 @@ fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsing
     // Only 'parsing' for this query: 'SELECT COUNT(*) FROM xxx'
     let min_len = "SELECT COUNT(*) FROM ".len();
     if sql_query.len() > min_len {
-        return Ok(SQLQuery::CountRows(sql_query[min_len..].to_string()));
+        Ok(SQLQuery::CountRows(sql_query[min_len..].to_string()))
     } else {
         Err(SQLQueryParsingError::BadQuery(sql_query.to_string()))
     }
@@ -437,7 +437,7 @@ fn parse_varint(
         .map_err(|_| SQLiteInternalError::VarIntConversionFail)?;
     let parsed_varint = u64::from_le_bytes(le_bytes);
 
-    return Ok((parsed_varint, idx));
+    Ok((parsed_varint, idx))
 }
 
 #[derive(Debug, Error)]
