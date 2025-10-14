@@ -137,9 +137,7 @@ fn handle_sql_query(
             let target_table_row = table_rows
                 .iter()
                 .find(|&r| r.tbl_name == *target_tbl_name)
-                .expect(&format!(
-                    "Could not find table with name '{target_tbl_name}'"
-                ));
+                .unwrap_or_else(|| panic!("Could not find table with name '{target_tbl_name}'"));
 
             // Get the database page size
             // This info is in the database header, at offset [16, 18]
