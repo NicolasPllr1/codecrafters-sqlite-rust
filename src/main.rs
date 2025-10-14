@@ -330,8 +330,7 @@ fn get_table_name(
         .map_err(SQLiteInternalError::SeekError)?;
 
     // 1st column: 'type'
-    let mut obj_type_bytes = Vec::new();
-    obj_type_bytes.resize(columns_byte_lengths[0] as usize, 0);
+    let mut obj_type_bytes = vec![0; columns_byte_lengths[0] as usize];
     db.read_exact(&mut obj_type_bytes)
         .map_err(SQLiteInternalError::ReadError)?;
 
@@ -340,16 +339,14 @@ fn get_table_name(
         .map_err(SQLiteInternalError::FoundBadObjectType)?;
 
     // 2nd column: 'name'
-    let mut name_bytes = Vec::new();
-    name_bytes.resize(columns_byte_lengths[1] as usize, 0);
+    let mut name_bytes = vec![0; columns_byte_lengths[1] as usize];
     db.read_exact(&mut name_bytes)
         .map_err(SQLiteInternalError::ReadError)?;
     assert!(columns_serial_types[1].rem_euclid(2) == 1);
     let name = String::from_utf8(name_bytes)?;
 
     // 3rd column: 'tbl_name'
-    let mut tbl_name_bytes = Vec::new();
-    tbl_name_bytes.resize(columns_byte_lengths[2] as usize, 0);
+    let mut tbl_name_bytes = vec![0; columns_byte_lengths[2] as usize];
     db.read_exact(&mut tbl_name_bytes)
         .map_err(SQLiteInternalError::ReadError)?;
 
@@ -357,9 +354,7 @@ fn get_table_name(
     let tbl_name = String::from_utf8(tbl_name_bytes)?;
 
     // 4th column: 'rootpage'
-    let mut rootpage_bytes = Vec::new();
-    rootpage_bytes.resize(columns_byte_lengths[3] as usize, 0);
-
+    let mut rootpage_bytes = vec![0; columns_byte_lengths[3] as usize];
     assert!(columns_byte_lengths[3] == 1); // TODO: add support for serial types 0..9.
                                            // Currently, assuming the serial type is 1,
                                            // i.e., that the root page is a u8 (1 byte
