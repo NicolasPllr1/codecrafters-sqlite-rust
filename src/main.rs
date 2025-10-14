@@ -130,7 +130,7 @@ fn handle_sql_query(
             let db_header_size = 100;
 
             db.seek(SeekFrom::Start(db_header_size))
-                .map_err(|e| SQLiteInternalError::SeekError(e))?;
+                .map_err(SQLiteInternalError::SeekError)?;
 
             let table_rows = parse_schema_table(db)?;
 
@@ -144,21 +144,21 @@ fn handle_sql_query(
             // Get the database page size
             // This info is in the database header, at offset [16, 18]
             db.seek(SeekFrom::Start(16))
-                .map_err(|e| SQLiteInternalError::SeekError(e))?;
+                .map_err(SQLiteInternalError::SeekError)?;
             let mut page_size_be_bytes = [0; 2];
             db.read_exact(&mut page_size_be_bytes)
-                .map_err(|e| SQLiteInternalError::ReadError(e))?;
+                .map_err(SQLiteInternalError::ReadError)?;
             let page_size = u16::from_be_bytes(page_size_be_bytes);
 
             // Get to correct page in the db
             let table_page_offset = page_size * (target_table_row.root_page - 1) as u16;
             db.seek(SeekFrom::Start(table_page_offset as u64))
-                .map_err(|e| SQLiteInternalError::SeekError(e))?;
+                .map_err(SQLiteInternalError::SeekError)?;
 
             // Read the page header
             let mut table_header_bytes = [0; 8];
             db.read_exact(&mut table_header_bytes)
-                .map_err(|e| SQLiteInternalError::ReadError(e))?;
+                .map_err(SQLiteInternalError::ReadError)?;
 
             // Extract the number of cells ~ the number of rows
             let nb_cells = u16::from_be_bytes([table_header_bytes[3], table_header_bytes[4]]);
@@ -199,7 +199,7 @@ fn get_cell_ptr_array(
     let mut offsets_array_buff: Vec<u8> = vec![0; (2 * nb_cells).into()];
     b_tree_page_content
         .read_exact(&mut offsets_array_buff)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
 
     let offsets_array: Vec<u16> = offsets_array_buff
         .chunks_exact(2)
@@ -255,7 +255,7 @@ fn parse_schema_table(
     // 'The two-byte integer at offset 3 gives the number of cells on the page.'
     let mut sqlite_schema_table_header = [0; 8];
     db.read_exact(&mut sqlite_schema_table_header)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
 
     let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, db)?;
 
@@ -327,23 +327,23 @@ fn get_table_name(
 
     // Reading the record body:
     db.seek(SeekFrom::Start(offset))
-        .map_err(|e| SQLiteInternalError::SeekError(e))?;
+        .map_err(SQLiteInternalError::SeekError)?;
 
     // 1st column: 'type'
     let mut obj_type_bytes = Vec::new();
     obj_type_bytes.resize(columns_byte_lengths[0] as usize, 0);
     db.read_exact(&mut obj_type_bytes)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
 
     assert!(columns_serial_types[0].rem_euclid(2) == 1);
     let object_type = ObjectType::from_str(&String::from_utf8(obj_type_bytes)?)
-        .map_err(|e| SQLiteInternalError::FoundBadObjectType(e))?;
+        .map_err(SQLiteInternalError::FoundBadObjectType)?;
 
     // 2nd column: 'name'
     let mut name_bytes = Vec::new();
     name_bytes.resize(columns_byte_lengths[1] as usize, 0);
     db.read_exact(&mut name_bytes)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
     assert!(columns_serial_types[1].rem_euclid(2) == 1);
     let name = String::from_utf8(name_bytes)?;
 
@@ -351,7 +351,7 @@ fn get_table_name(
     let mut tbl_name_bytes = Vec::new();
     tbl_name_bytes.resize(columns_byte_lengths[2] as usize, 0);
     db.read_exact(&mut tbl_name_bytes)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
 
     assert!(columns_serial_types[2].rem_euclid(2) == 1);
     let tbl_name = String::from_utf8(tbl_name_bytes)?;
@@ -366,7 +366,7 @@ fn get_table_name(
                                            // integer)
 
     db.read_exact(&mut rootpage_bytes)
-        .map_err(|e| SQLiteInternalError::ReadError(e))?;
+        .map_err(SQLiteInternalError::ReadError)?;
     let be_bytes: [u8; 1] = rootpage_bytes[..1]
         .try_into()
         .expect("slice should have 8 bytes");
@@ -405,7 +405,7 @@ fn parse_varint(
 ) -> Result<(u64, usize), SQLiteInternalError> {
     reader
         .seek(SeekFrom::Start(offset))
-        .map_err(|e| SQLiteInternalError::SeekError(e))?;
+        .map_err(SQLiteInternalError::SeekError)?;
     let mut buf_reader = BufReader::new(reader);
 
     // Parsing the varint
@@ -419,7 +419,7 @@ fn parse_varint(
     while msb {
         buf_reader
             .read_exact(&mut varint_byte)
-            .map_err(|e| SQLiteInternalError::ReadError(e))?;
+            .map_err(SQLiteInternalError::ReadError)?;
 
         // update MSB
         msb = ((varint_byte[0] >> 7) & 0b1) == 1;
