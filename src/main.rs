@@ -418,7 +418,7 @@ fn parse_varint(
         msb = ((varint_byte[0] >> 7) & 0b1) == 1;
 
         // drop the MSB
-        let byte_without_msb = varint_byte[0] & 0b01111111;
+        let byte_without_msb = varint_byte[0] & 0b0111_1111;
         // add this byte to the varint bytes we already read
         varint_bytes[idx] = byte_without_msb;
         idx += 1;
