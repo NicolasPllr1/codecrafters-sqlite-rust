@@ -189,7 +189,7 @@ pub enum SQLiteInternalError {
 /// "The cell pointer array of a b-tree page immediately follows the b-tree page header. Let K be the number of cells on the btree. The cell pointer array consists of K 2-byte integer offsets to the cell contents."
 /// And codecrafters add: "The offsets are relative to the start of the page".
 fn get_cell_ptr_array(
-    header: &[u8; 8],
+    header: [u8; 8],
     b_tree_page_content: &mut (impl Read + Seek),
 ) -> Result<Vec<u16>, SQLiteInternalError> {
     let nb_cells: u16 = u16::from_be_bytes([header[3], header[4]]);
@@ -255,7 +255,7 @@ fn parse_schema_table(
     db.read_exact(&mut sqlite_schema_table_header)
         .map_err(SQLiteInternalError::ReadError)?;
 
-    let cell_ptr_array = get_cell_ptr_array(&sqlite_schema_table_header, db)?;
+    let cell_ptr_array = get_cell_ptr_array(sqlite_schema_table_header, db)?;
 
     // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
 
