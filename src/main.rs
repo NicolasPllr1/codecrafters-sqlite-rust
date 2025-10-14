@@ -37,7 +37,7 @@ fn main() -> Result<(), SQLiteError> {
             // at an offset of 16 bytes from the beginning of the database file.'
             let page_size = u16::from_be_bytes([db_header[16], db_header[17]]);
 
-            println!("database page size: {}", page_size);
+            println!("database page size: {page_size}");
 
             // Next, reading the 'sqlite_schema' table header
             let mut sqlite_schema_table_header = [0; 8];
@@ -46,7 +46,7 @@ fn main() -> Result<(), SQLiteError> {
             // 'The two-byte integer at offset 3 gives the number of cells on the page.'
             let nb_tables =
                 u16::from_be_bytes([sqlite_schema_table_header[3], sqlite_schema_table_header[4]]);
-            println!("number of tables: {}", nb_tables);
+            println!("number of tables: {nb_tables}");
         }
         ".tables" => {
             let mut file = File::open(&args[1])?;
@@ -75,7 +75,7 @@ fn main() -> Result<(), SQLiteError> {
             let mut db_file = File::open(&args[1])?;
             handle_sql_query(&sql_query, &mut db_file)?;
         }
-        _ => panic!("Missing or invalid command passed: {}", command),
+        _ => panic!("Missing or invalid command passed: {command}"),
     }
 
     Ok(())
