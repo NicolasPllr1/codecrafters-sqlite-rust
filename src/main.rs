@@ -262,14 +262,14 @@ fn parse_schema_table(
     let page_offset = 0;
     let mut sql_schema_rows = Vec::new();
     for cell_offset in cell_ptr_array {
-        let row = get_table_name(page_offset, cell_offset, db)?;
+        let row = parse_sql_schema_table_cell(page_offset, cell_offset, db)?;
         sql_schema_rows.push(row);
     }
 
     Ok(sql_schema_rows)
 }
 
-/// Get the table name raw bytes from the corresponding cell data in the sql schema table.
+/// Parse one cell in the 'sql_schema' table, at a given cell offset.
 ///
 /// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
 //
@@ -278,7 +278,7 @@ fn parse_schema_table(
 /// - rowid (varint)
 /// - 'record'
 ///   Documentation on the varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
-fn get_table_name(
+fn parse_sql_schema_table_cell(
     page_offset: u16,
     cell_offset: u16,
     db: &mut (impl Read + Seek),
