@@ -103,6 +103,7 @@ pub enum SQLQueryParsingError {
 // NOTE: Hardcoding supported queries for now
 const SELECT_COUNT_STAR_FROM: &str = "SELECT COUNT(*) FROM ";
 const SELECT_COL_FROM_TABLE_RE: &str = r"^SELECT (.+) FROM (.+)$";
+const COL_NAMES_FROM_CREATE_STMT: &str = r"(?m)^\s*(?:CREATE TABLE\s+\w+\s*\(|,)?\s*(\w+)\s+\w+";
 
 fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsingError> {
     if let Some(table_name) = sql_query.strip_prefix(SELECT_COUNT_STAR_FROM) {
@@ -111,7 +112,6 @@ fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsing
         let re_select_col_from_table =
             Regex::new(SELECT_COL_FROM_TABLE_RE).expect("creating new regex should not fail");
         if let Some(caps) = re_select_col_from_table.captures(sql_query) {
-            dbg!(&caps);
             match caps.len() {
                 3 => Ok(SQLQuery::Select(SelectQueryData {
                     column_name: caps.get(1).map_or("", |m| m.as_str()).to_string(),
@@ -182,9 +182,66 @@ fn handle_sql_query(
             table_name,
             column_name,
         }) => {
-            println!("SELECT COL FROM TABLE");
-            dbg!(table_name);
-            dbg!(column_name);
+            // Skipping the database header
+            let db_header_size = 100;
+
+            db.seek(SeekFrom::Start(db_header_size))
+                .map_err(SQLiteInternalError::SeekError)?;
+
+            let table_rows = parse_schema_table(db)?;
+
+            let target_table_row = table_rows
+                .iter()
+                .find(|&r| r.tbl_name == *table_name)
+                .unwrap_or_else(|| panic!("Could not find table with name '{table_name}'"));
+
+            // parsing the sql stmt to extract columns names
+            let cols = col_names_from_sql_create_stmt(&target_table_row.sql)?;
+            let nb_total_cols = cols.len();
+            let target_col_idx = cols
+                .iter()
+                .position(|s| s == column_name)
+                .expect("did not find the target column");
+
+            // Get the database page size
+            // This info is in the database header, at offset [16, 18]
+            db.seek(SeekFrom::Start(16))
+                .map_err(SQLiteInternalError::SeekError)?;
+            let mut page_size_be_bytes = [0; 2];
+            db.read_exact(&mut page_size_be_bytes)
+                .map_err(SQLiteInternalError::ReadError)?;
+            let page_size = u16::from_be_bytes(page_size_be_bytes);
+
+            // Get to correct page in the db corresponding to our target table
+            let table_page_offset = page_size * (target_table_row.root_page - 1) as u16;
+            db.seek(SeekFrom::Start(table_page_offset as u64))
+                .map_err(SQLiteInternalError::SeekError)?;
+
+            // Read the table page header
+            let mut table_header_bytes = [0; 8];
+            db.read_exact(&mut table_header_bytes)
+                .map_err(SQLiteInternalError::ReadError)?;
+
+            let cell_ptr_array = get_cell_ptr_array(table_header_bytes, db)?;
+
+            // NOTE: at this point, we are 2*nb_cells bytes deep after the page header
+
+            let page_offset = table_page_offset;
+            let mut values_for_target_col = Vec::new();
+            for cell_offset in cell_ptr_array {
+                let val = get_col_value_in_cell(
+                    page_offset,
+                    cell_offset,
+                    db,
+                    target_col_idx,
+                    nb_total_cols,
+                )?;
+                values_for_target_col.push(val);
+            }
+
+            for val in values_for_target_col {
+                println!("{val}");
+            }
         }
     }
     Ok(())
@@ -263,7 +320,7 @@ struct SchemaTableRow {
     _name: String,
     tbl_name: String,
     root_page: u8,
-    _sql: String,
+    sql: String,
 }
 /// Parse the 'sql_schema' table.
 /// See the 'sql schema table' doc: https://www.sqlite.org/schematab.html
@@ -404,7 +461,7 @@ fn parse_sql_schema_table_cell(
         _name: name,
         tbl_name,
         root_page,
-        _sql: sql,
+        sql,
     })
 }
 
@@ -414,9 +471,9 @@ fn parse_sql_schema_table_cell(
 ///
 /// Returns:
 /// - the decoded varint as a u64
-//  - the size in bytes of this decoded varint
-//
-// [1]: Protobuf documentation on varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
+/// - the size in bytes of this decoded varint
+///
+/// [1]: Protobuf documentation on varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
 fn parse_varint(
     offset: u64,
     reader: &mut (impl Read + Seek),
@@ -448,7 +505,6 @@ fn parse_varint(
             .map_err(SQLiteInternalError::ReadError)?;
 
         // update MSB
-
         msb = varint_byte[0] >= 0x80; // 0x80 = 1000_000 = 128
 
         let contrib = u64::from(varint_byte[0]); // current byte contribution
@@ -486,3 +542,83 @@ fn serial_type_2_byte_length(serial_type: u64) -> Result<u64, SerialTypeError> {
 // Hex notes
 //
 // ec0 -> 14*(16*16) + 12*16 + 0 = 3584 + 192 + 0 = 3776
+
+/// Parse column names from a 'CREATE' SQL statement.
+///
+/// Example: 'CREATE TABLE apples\n(\n\tid integer primary key autoincrement,\n\tname text,\n\tcolor
+/// text\n)' -> 'id', 'name', 'color'
+fn col_names_from_sql_create_stmt(
+    sql_create_stmt: &str,
+) -> Result<Vec<String>, SQLiteInternalError> {
+    let re_cols =
+        Regex::new(COL_NAMES_FROM_CREATE_STMT).expect("creating new regex should not fail");
+
+    Ok(re_cols
+        .captures_iter(sql_create_stmt)
+        .map(|cap| cap[1].to_string())
+        .collect())
+}
+
+fn get_col_value_in_cell(
+    page_offset: u16,
+    cell_offset: u16,
+    db: &mut (impl Read + Seek),
+    target_col_idx: usize,
+    nb_total_cols: usize,
+) -> Result<String, SQLiteInternalError> {
+    let mut offset = (page_offset + cell_offset) as u64;
+
+    // First, the cell size
+    let (_cell_size, cell_varint_size) = parse_varint(offset, db)?;
+
+    // Next, the rowid
+    offset += cell_varint_size as u64;
+    let (_rowid, rowid_varint_size) = parse_varint(offset, db)?;
+
+    offset += rowid_varint_size as u64;
+
+    // Reading the record header size (varint)
+    let (header_size, header_size_varint) = parse_varint(offset, db)?;
+
+    // Array of the serial types
+    let mut columns_serial_types = vec![0; nb_total_cols];
+
+    let mut header_read_size = header_size_varint as u64; // we already read the bytes for the header-size varint itself
+    offset += header_read_size;
+    let mut col_idx = 0;
+    while header_read_size < header_size {
+        assert!(col_idx < columns_serial_types.len());
+
+        let (serial_type, varint_size) = parse_varint(offset, db)?;
+
+        columns_serial_types[col_idx] = serial_type;
+
+        offset += varint_size as u64;
+        header_read_size += varint_size as u64;
+        col_idx += 1;
+    }
+
+    // Map the serial types to the byte length they encode
+    let columns_byte_lengths = columns_serial_types
+        .iter()
+        .map(|&s| serial_type_2_byte_length(s))
+        .collect::<Result<Vec<_>, SerialTypeError>>()?;
+
+    let offset_to_target_col_value: u64 = columns_byte_lengths[..target_col_idx].iter().sum();
+    db.seek(SeekFrom::Start(
+        offset_to_target_col_value + offset, // offset_to_target_col_value
+                                             //     .try_into()
+                                             //     .expect("conversion from u64 to i64"),
+    ))
+    .map_err(SQLiteInternalError::SeekError)?;
+
+    // Read the target column value
+    let mut target_col_bytes = vec![0; columns_byte_lengths[target_col_idx] as usize];
+    db.read_exact(&mut target_col_bytes)
+        .map_err(SQLiteInternalError::ReadError)?;
+    assert!(columns_serial_types[target_col_idx].rem_euclid(2) == 1);
+
+    let col_value = String::from_utf8(target_col_bytes)?; // NOTE: assuming it's a string
+
+    Ok(col_value)
+}
