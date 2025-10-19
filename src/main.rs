@@ -114,8 +114,8 @@ fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsing
             dbg!(&caps);
             match caps.len() {
                 3 => Ok(SQLQuery::Select(SelectQueryData {
-                    table_name: caps.get(1).map_or("", |m| m.as_str()).to_string(),
-                    column_name: caps.get(2).map_or("", |m| m.as_str()).to_string(),
+                    column_name: caps.get(1).map_or("", |m| m.as_str()).to_string(),
+                    table_name: caps.get(2).map_or("", |m| m.as_str()).to_string(),
                 })),
                 _ => Err(SQLQueryParsingError::BadQuery(sql_query.to_string())),
             }
