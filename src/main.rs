@@ -450,14 +450,16 @@ fn parse_varint(
         // update MSB
         msb = varint_byte[0] > 128; // 128 = 0x80
 
-        varint_total += u64::from(varint_byte[0]) << varint_byte_idx; // current byte contribution
 
+        let contrib = u64::from(varint_byte[0]); // current byte contribution
+        varint_total = (varint_total << 7) + contrib;
         if !msb {
             return Ok((varint_total, varint_byte_idx + 1)); // MSB indicates this is the end of the
                                                             // varint -> early return
         }
 
-        varint_total -= 0x80 << varint_byte_idx; // 'dropping' the MSB
+        varint_total -= 0x80; // 'dropping' the MSB (bit = 1) from the current byte
+                              // contribution we just  added
         varint_byte_idx += 1;
     }
 
