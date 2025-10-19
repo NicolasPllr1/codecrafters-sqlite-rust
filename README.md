@@ -10,6 +10,7 @@ is
 [stored in B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
 and more.
 
+![SQLite logo](./assets/SQLite-logo.png)
 
 ## Sample Databases
 
