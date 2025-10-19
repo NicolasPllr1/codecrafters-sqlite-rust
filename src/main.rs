@@ -386,12 +386,15 @@ fn parse_sql_schema_table_cell(
     })
 }
 
-/// Reads the varint using the Reader starting from the given offset.
-/// Will used buffer reads to read 1 byte at a time the varint.
+/// Reads the varint[1] using the Reader starting from the given offset.
+/// Uses a combination of bit-shifts, comparaisons and cast to from u8 to u64 to decode the varint.
+/// Will used buffer reads to read 1 byte at a time from the varint.
 ///
 /// Returns:
-/// - the parsed varint as a u64
-// - the size in bytes of the varint encoding
+/// - the decoded varint as a u64
+//  - the size in bytes of this decoded varint
+//
+// [1]: Protobuf documentation on varint encoding: https://protobuf.dev/programming-guides/encoding/#varints
 fn parse_varint(
     offset: u64,
     reader: &mut (impl Read + Seek),
@@ -403,34 +406,40 @@ fn parse_varint(
 
     // Parsing the varint
     // Going byte by byte, checking the MSB for continuation
+    let mut varint_total: u64 = 0; // each byte contribution will be accumulated here
 
-    let mut varint_bytes = [0; 9]; // max 9 bytes for a varint
-    let mut idx: usize = 0; // idx into the varint bytes
-    let mut msb: bool = true; // 0 ~ false ~ end of the varint ; 1 ~ true ~ varint continues onto the
-                              // next byte
-    let mut varint_byte = [0; 1];
+    let mut varint_byte_idx: usize = 0; // idx into the varint bytes
+
+    // The Most Significant Byte (MSB) tells us about continuation:
+    // - 0 ~ false ~ end of the varint
+    // - 1 ~ true ~ varint continues onto the next byte
+    let mut msb: bool = true;
+
+    let mut varint_byte = [0; 1]; // current varint byte will be read into this buffer
     while msb {
+        // NOTE: important assumption about the varint encoding.
+        // -> At most 9 bytes should be read.
+        assert!(varint_byte_idx < 9);
+
         buf_reader
             .read_exact(&mut varint_byte)
             .map_err(SQLiteInternalError::ReadError)?;
 
         // update MSB
-        msb = ((varint_byte[0] >> 7) & 0b1) == 1;
+        msb = varint_byte[0] > 128; // 128 = 0x80
 
-        // drop the MSB
-        let byte_without_msb = varint_byte[0] & 0b0111_1111;
-        // add this byte to the varint bytes we already read
-        varint_bytes[idx] = byte_without_msb;
-        idx += 1;
+        varint_total += u64::from(varint_byte[0]) << varint_byte_idx; // current byte contribution
+
+        if !msb {
+            return Ok((varint_total, varint_byte_idx + 1)); // MSB indicates this is the end of the
+                                                            // varint -> early return
+        }
+
+        varint_total -= 0x80 << varint_byte_idx; // 'dropping' the MSB
+        varint_byte_idx += 1;
     }
-    assert!(varint_bytes[varint_bytes.len() - 1] == 0);
 
-    let le_bytes: [u8; 8] = varint_bytes[..8]
-        .try_into()
-        .map_err(|_| SQLiteInternalError::VarIntConversionFail)?;
-    let parsed_varint = u64::from_le_bytes(le_bytes);
-
-    Ok((parsed_varint, idx))
+    Ok((varint_total, varint_byte_idx))
 }
 
 #[derive(Debug, Error)]

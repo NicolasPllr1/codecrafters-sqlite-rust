@@ -107,3 +107,13 @@ iterating over the collected 'varint' bytes. For each varint byte:
   would do something like `final_array[idx..idx+7] = varint_byte[1..]` so that
   the the next 7 bits after idx in my final_array get the values from the 7 LSB
   in the varint.
+
+- [tokio's prost implemenation of varint decoding](https://github.com/tokio-rs/prost/blob/25cef930100c10879a98ee2724ee44b94e436135/prost/src/encoding/varint.rs#L71)
+
+  - fully unrolling the loop, as they are max 9 bytes to decode
+  - accumulator used, adding up each byte contribution to the varint as its
+    decoded using a combination of bit-shit and casting.
+
+Beggining of this fn:
+
+![Tokio's prost varint decoding without unsafe excepted get_unchcked calls](tokio_prost_safe_varint_decoding.png%7C400)
