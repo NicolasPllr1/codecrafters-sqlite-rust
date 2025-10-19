@@ -365,17 +365,16 @@ fn parse_sql_schema_table_cell(
         .expect("slice should have 8 bytes");
     let root_page = u8::from_be_bytes(be_bytes);
 
-    // TODO: fix invalid utf-8 when extractig the sql column
-    // // 5th column: 'sql'
-    // let mut sql_bytes = Vec::new();
-    // sql_bytes.resize(columns_byte_lengths[4] as usize, 1);
-    // // dbg!(columns_serial_types[4]);
-    // db.read_exact(&mut sql_bytes)?;
+    // NOTE: the `sql` column corresponds to CREATE statements
+    // This is what we want to parse to extract the current table , e.g. 'apples', describe in this
+    // cell of the sql_schema table
     //
-    // assert!(columns_serial_types[4].rem_euclid(2) == 1);
-    // // dbg!(&sql_bytes);
-    // let sql = String::from_utf8(sql_bytes)?;
-    let sql = String::new();
+    let mut sql_bytes = vec![0; columns_byte_lengths[4] as usize];
+    db.read_exact(&mut sql_bytes)
+        .map_err(SQLiteInternalError::ReadError)?;
+
+    assert!(columns_serial_types[4].rem_euclid(2) == 1);
+    let sql = String::from_utf8(sql_bytes)?;
 
     Ok(SchemaTableRow {
         _object_type: object_type,
