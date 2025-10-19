@@ -1,3 +1,4 @@
+use regex::Regex;
 use thiserror::Error;
 
 use std::fs::File;
@@ -83,30 +84,44 @@ fn main() -> Result<(), SQLiteError> {
 
 #[derive(Debug)]
 enum SQLQuery {
-    CountRows(String), // count rows in a table. The string hold the table name.
-                       // Select(SelectQueryData), // SELECT name FROM apples
+    CountRows(String),       // count rows in a table. The string hold the table name.
+    Select(SelectQueryData), // SELECT name FROM apples
 }
 
-// #[derive(Debug)]
-// struct SelectQueryData {
-//     table_name: String,
-//     column_name: String,
-// }
-
-// Box<dyn std::error::Error>
+#[derive(Debug)]
+struct SelectQueryData {
+    table_name: String,
+    column_name: String,
+}
 
 #[derive(Debug, Error)]
 pub enum SQLQueryParsingError {
     #[error("Only 'SELECT COUNT(*) FROM xxx' is supported, got: {}", .0)]
     BadQuery(String),
 }
+
+// NOTE: Hardcoding supported queries for now
+const SELECT_COUNT_STAR_FROM: &str = "SELECT COUNT(*) FROM ";
+const SELECT_COL_FROM_TABLE_RE: &str = r"^SELECT (.+) FROM (.+)$";
+
 fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsingError> {
-    // Only 'parsing' for this query: 'SELECT COUNT(*) FROM xxx'
-    let min_len = "SELECT COUNT(*) FROM ".len();
-    if sql_query.len() > min_len {
-        Ok(SQLQuery::CountRows(sql_query[min_len..].to_string()))
+    if let Some(table_name) = sql_query.strip_prefix(SELECT_COUNT_STAR_FROM) {
+        Ok(SQLQuery::CountRows(table_name.to_string()))
     } else {
-        Err(SQLQueryParsingError::BadQuery(sql_query.to_string()))
+        let re_select_col_from_table =
+            Regex::new(SELECT_COL_FROM_TABLE_RE).expect("creating new regex should not fail");
+        if let Some(caps) = re_select_col_from_table.captures(sql_query) {
+            dbg!(&caps);
+            match caps.len() {
+                3 => Ok(SQLQuery::Select(SelectQueryData {
+                    table_name: caps.get(1).map_or("", |m| m.as_str()).to_string(),
+                    column_name: caps.get(2).map_or("", |m| m.as_str()).to_string(),
+                })),
+                _ => Err(SQLQueryParsingError::BadQuery(sql_query.to_string())),
+            }
+        } else {
+            Err(SQLQueryParsingError::BadQuery(sql_query.to_string()))
+        }
     }
 }
 
@@ -162,7 +177,15 @@ fn handle_sql_query(
             let nb_cells = u16::from_be_bytes([table_header_bytes[3], table_header_bytes[4]]);
 
             println!("{nb_cells}");
-        } // _ => panic!("Query not implemented yet"),
+        }
+        SQLQuery::Select(SelectQueryData {
+            table_name,
+            column_name,
+        }) => {
+            println!("SELECT COL FROM TABLE");
+            dbg!(table_name);
+            dbg!(column_name);
+        }
     }
     Ok(())
 }
