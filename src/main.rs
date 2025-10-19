@@ -448,8 +448,8 @@ fn parse_varint(
             .map_err(SQLiteInternalError::ReadError)?;
 
         // update MSB
-        msb = varint_byte[0] > 128; // 128 = 0x80
 
+        msb = varint_byte[0] >= 0x80; // 0x80 = 1000_000 = 128
 
         let contrib = u64::from(varint_byte[0]); // current byte contribution
         varint_total = (varint_total << 7) + contrib;
