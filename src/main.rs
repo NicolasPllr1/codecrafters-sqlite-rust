@@ -182,6 +182,8 @@ fn handle_sql_query(
             table_name,
             column_name,
         }) => {
+            dbg!(&table_name);
+            dbg!(&column_name);
             // Skipping the database header
             let db_header_size = 100;
 
@@ -197,6 +199,7 @@ fn handle_sql_query(
 
             // parsing the sql stmt to extract columns names
             let cols = col_names_from_sql_create_stmt(&target_table_row.sql)?;
+            dbg!(&cols);
             let nb_total_cols = cols.len();
             let target_col_idx = cols
                 .iter()
