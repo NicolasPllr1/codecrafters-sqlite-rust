@@ -553,8 +553,10 @@ fn serial_type_2_byte_length(serial_type: u64) -> Result<u64, SerialTypeError> {
 fn col_names_from_sql_create_stmt(
     sql_create_stmt: &str,
 ) -> Result<Vec<String>, SQLiteInternalError> {
+    dbg!(&sql_create_stmt);
     let re_cols =
         Regex::new(COL_NAMES_FROM_CREATE_STMT).expect("creating new regex should not fail");
+    dbg!(&re_cols);
 
     Ok(re_cols
         .captures_iter(sql_create_stmt)
