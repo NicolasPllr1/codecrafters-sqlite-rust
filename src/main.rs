@@ -102,7 +102,7 @@ pub enum SQLQueryParsingError {
 
 // NOTE: Hardcoding supported queries for now
 const SELECT_COUNT_STAR_FROM: &str = "SELECT COUNT(*) FROM ";
-const SELECT_COL_FROM_TABLE_RE: &str = r"^SELECT (.+) FROM (.+)$";
+const SELECT_COL_FROM_TABLE_RE: &str = r"^select (.+) from (.+)$";
 const COL_NAMES_FROM_CREATE_STMT: &str = r"(?m)^\s*(?:CREATE TABLE\s+\w+\s*\(|,)?\s*(\w+)\s+\w+";
 
 fn pseudo_sql_query_parsing(sql_query: &str) -> Result<SQLQuery, SQLQueryParsingError> {
